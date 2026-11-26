@@ -15,14 +15,26 @@ from src.attacks import apply_blur_tensor, apply_gaussian_noise_tensor
 from src.watermark_net import WatermarkDecoder, WatermarkEncoder
 
 
+def apply_diff_jpeg_approx(x: torch.Tensor, levels: int = 16) -> torch.Tensor:
+    """Smooth straight-through quantization approximation for JPEG resilience during training."""
+    if levels <= 1:
+        return x
+    scale = float(levels - 1)
+    q = torch.round(torch.clamp(x, 0.0, 1.0) * scale) / scale
+    # Straight-through estimator (STE): forward quantized, backward identity
+    return torch.clamp(x + (q - x).detach(), 0.0, 1.0)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train lightweight watermark encoder/decoder.")
-    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--msg-bits", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--img-weight", type=float, default=10.0)
-    parser.add_argument("--msg-weight", type=float, default=1.0)
+    parser.add_argument("--alpha", type=float, default=0.04)
+    parser.add_argument("--lr", type=float, default=2e-3)
+    parser.add_argument("--img-weight", type=float, default=25.0)
+    parser.add_argument("--msg-weight", type=float, default=10.0)
+    parser.add_argument("--jpeg-aug", action="store_true", help="Enable STE quantization noise for JPEG resilience.")
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--save-dir", type=str, default="outputs/checkpoints")
     return parser.parse_args()
@@ -31,16 +43,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training on device: {device}")
+    print(f"Training on device: {device} | alpha={args.alpha} | msg_bits={args.msg_bits}")
 
     transform = T.Compose([T.ToTensor()])
     dataset = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
-    encoder = WatermarkEncoder(msg_bits=args.msg_bits, alpha=0.05).to(device)
+    encoder = WatermarkEncoder(msg_bits=args.msg_bits, alpha=args.alpha).to(device)
     decoder = WatermarkDecoder(msg_bits=args.msg_bits).to(device)
 
-    optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(decoder.parameters()), lr=args.lr)
+    optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(decoder.parameters()), lr=args.lr, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-5)
+
     mse_loss = nn.MSELoss()
     bce_loss = nn.BCEWithLogitsLoss()
 
@@ -59,9 +73,15 @@ def main() -> None:
             msgs = torch.randint(0, 2, (bsz, args.msg_bits), device=device, dtype=torch.float32)
 
             watermarked = encoder(images, msgs)
-            attacked = apply_gaussian_noise_tensor(watermarked, sigma=0.02)
-            if torch.rand(1).item() < 0.5:
+            attacked = watermarked
+
+            if torch.rand(1).item() < 0.7:
+                attacked = apply_gaussian_noise_tensor(attacked, sigma=0.015)
+            if torch.rand(1).item() < 0.4:
                 attacked = apply_blur_tensor(attacked, kernel_size=3)
+            if args.jpeg_aug and torch.rand(1).item() < 0.6:
+                levels = int(torch.randint(12, 33, (1,)).item())
+                attacked = apply_diff_jpeg_approx(attacked, levels=levels)
 
             pred_logits = decoder(attacked)
             loss_img = mse_loss(watermarked, images)
@@ -79,9 +99,12 @@ def main() -> None:
             total_loss += loss.item()
             total_bit_acc += bit_acc
 
+        scheduler.step()
         n_batches = len(loader)
+        curr_lr = scheduler.get_last_lr()[0]
         print(
-            f"Epoch {epoch}/{args.epochs} | "
+            f"Epoch {epoch:02d}/{args.epochs:02d} | "
+            f"LR: {curr_lr:.6f} | "
             f"Loss: {total_loss / n_batches:.4f} | "
             f"Train Bit Acc: {total_bit_acc / n_batches:.4f}"
         )
@@ -92,6 +115,7 @@ def main() -> None:
             "encoder": encoder.state_dict(),
             "decoder": decoder.state_dict(),
             "msg_bits": args.msg_bits,
+            "alpha": args.alpha,
         },
         ckpt_path,
     )

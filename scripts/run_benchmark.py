@@ -45,7 +45,8 @@ def main() -> None:
     ckpt = torch.load(args.checkpoint, map_location=device)
     msg_bits = int(ckpt.get("msg_bits", 32))
 
-    encoder = WatermarkEncoder(msg_bits=msg_bits, alpha=0.08).to(device)
+    alpha = float(ckpt.get("alpha", 0.04))
+    encoder = WatermarkEncoder(msg_bits=msg_bits, alpha=alpha).to(device)
     decoder = WatermarkDecoder(msg_bits=msg_bits).to(device)
     encoder.load_state_dict(ckpt["encoder"])
     decoder.load_state_dict(ckpt["decoder"])
