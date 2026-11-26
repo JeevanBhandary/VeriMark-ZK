@@ -1,0 +1,28 @@
+# Virtual environment & Python cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Datasets, training outputs & checkpoints
+data/
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.csv
+
+# Secrets & local environment files
+.env
+.env.*
+
+# OS & editor files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
