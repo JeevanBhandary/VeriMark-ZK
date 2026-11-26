@@ -5,7 +5,7 @@ import torch.nn as nn
 class WatermarkEncoder(nn.Module):
     """Embeds a binary message vector into an RGB image tensor in [0, 1]."""
 
-    def __init__(self, msg_bits: int = 32, alpha: float = 0.04) -> None:
+    def __init__(self, msg_bits: int = 32, alpha: float = 0.08) -> None:
         super().__init__()
         self.msg_bits = msg_bits
         self.alpha = alpha
@@ -45,13 +45,12 @@ class WatermarkDecoder(nn.Module):
             nn.SiLU(),
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.SiLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
             nn.Flatten(),
         )
         self.head = nn.Sequential(
-            nn.Linear(128, 128),
+            nn.Linear(128 * 4 * 4, 256),
             nn.SiLU(),
-            nn.Linear(128, msg_bits),
+            nn.Linear(256, msg_bits),
         )
 
     def forward(self, image: torch.Tensor) -> torch.Tensor:
